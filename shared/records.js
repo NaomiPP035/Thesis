@@ -1,14 +1,17 @@
 (function(){'use strict';
 const legacyKey='between-surfaces.records.v1',config=window.ATLAS_CLOUD_CONFIG;
-const client=window.supabase.createClient(config.url,config.publishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-let user=null,records=[],phase='loading',message='',revision=0,busySync=false,started=false;
+const authStorageKey='sb-'+new URL(config.url).hostname.split('.')[0]+'-auth-token';
+let storageFailure='';
+const authStorage={getItem(key){try{return localStorage.getItem(key)}catch{storageFailure='浏览器阻止了登录凭据存储，请允许网站存储后重试。';throw Error(storageFailure)}},setItem(key,value){try{localStorage.setItem(key,value);if(localStorage.getItem(key)!==value)throw Error('Storage verification failed')}catch{storageFailure='浏览器没有保存登录凭据，刷新后将无法保持登录。请允许网站存储或换用普通浏览窗口。';throw Error(storageFailure)}},removeItem(key){try{localStorage.removeItem(key)}catch{storageFailure='无法清除本机登录凭据。';throw Error(storageFailure)}}};
+const client=window.supabase.createClient(config.url,config.publishableKey,{auth:{storage:authStorage,storageKey:authStorageKey,persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+let user=null,records=[],phase='restoring',message='正在恢复登录…',revision=0,busySync=false,started=false;
 function readList(key){const text=localStorage.getItem(key);if(!text)return[];const data=JSON.parse(text);if(!Array.isArray(data))throw Error('本地记录格式无法读取，请先导出备份。');return data.filter(r=>r&&typeof r.id==='string'&&typeof r.text==='string'&&typeof r.title==='string')}
 function cacheKey(id){return 'between-surfaces.cloud-cache.v1.'+id}function queueKey(id){return 'between-surfaces.cloud-pending.v1.'+id}
 function pending(){if(!user)return[];return readList(queueKey(user.id))}
 function legacy(){return readList(legacyKey)}
 function notify(){window.dispatchEvent(new Event('atlas-records-changed'));window.dispatchEvent(new Event('atlas-cloud-state'))}
-function state(){let count=0;try{count=pending().length}catch{}return {user:user?{id:user.id,email:user.email}:null,phase,message,count:records.length,pending:count}}
-function errorText(error){const text=error?.message||String(error);if(/atlas_moments|PGRST205|42P01/.test(text))return '数据库尚未就绪，请先在 Supabase 运行建表脚本。';if(/permission denied|row-level|42501/.test(text))return '数据库权限尚未配置完成，请重新运行建表脚本。';if(/fetch|network|Load failed/i.test(text))return '网络连接失败。文字仍在本地，请联网后重试。';if(/rate limit/i.test(text))return '操作过于频繁，请稍后再试。';if(/email.*not.*allowed|not authorized/i.test(text))return '该邮箱暂时不能接收登录邮件，请检查 Supabase 的邮箱发送设置。';return text}
+function state(){let count=0;try{count=pending().length}catch{}return {storageFailure,origin:location.origin,user:user?{id:user.id,email:user.email}:null,phase,message,count:records.length,pending:count}}
+function errorText(error){const text=error?.message||String(error);if(/atlas_moments|PGRST205|42P01/.test(text))return '数据库尚未就绪，请先在 Supabase 运行建表脚本。';if(/permission denied|row-level|42501/.test(text))return '数据库权限尚未配置完成，请重新运行建表脚本。';if(/fetch|network|Load failed/i.test(text))return '网络连接失败。文字仍在本地，请联网后重试。';if(error?.code==='over_email_send_rate_limit'||/email rate limit/i.test(text))return 'Supabase 的邮件发送额度已用完。这不是网页限制；请稍后再发邮件，或使用已设置的网站密码登录。';if(error?.code==='over_request_rate_limit'||/rate limit|security purposes|after.*seconds/i.test(text))return 'Supabase 暂时限制了重复请求，请稍后再试。已有网站密码时可改用密码登录。';if(/invalid login credentials/i.test(text))return '邮箱或网站密码不正确。这里不是 Supabase 控制台的密码；请先在网站登录后设置密码。';if(/email.*not.*allowed|not authorized/i.test(text))return '该邮箱暂时不能接收登录邮件，请检查 Supabase 的邮箱发送设置。';return text}
 function cache(){if(user)try{localStorage.setItem(cacheKey(user.id),JSON.stringify(records))}catch{message='云端记录已加载，但浏览器无法缓存；请保持联网。'}}
 function validate(r){if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.id))throw Error('记录编号无效。');if(!r.title?.trim()||!r.text?.trim()||r.title.length>160||r.text.length>10000)throw Error('请检查标题和文字长度。');if(!Number.isFinite(new Date(r.recordedAt).getTime()))throw Error('记录时间无效。');return {id:r.id,title:r.title,text:r.text,recordedAt:r.recordedAt,place:r.place||'',object:r.object||'',body:r.body||'',mood:r.mood||'',senses:Array.isArray(r.senses)?r.senses:[],color:/^#[a-f0-9]{6}$/i.test(r.color)?r.color:'#94b9ad'}}
 async function add(input){await ready;if(!user)throw Error('请先登录，再将这一刻保存到云端。');const r=validate(input),uid=user.id;const queued=readList(queueKey(uid));const index=queued.findIndex(x=>x.id===r.id);if(index>=0)queued[index]=r;else queued.push(r);localStorage.setItem(queueKey(uid),JSON.stringify(queued));revision++;phase='saving';message='正在保存到云端…';notify();
@@ -18,11 +21,17 @@ async function refresh(){await ready;if(!user)return;const uid=user.id,version=r
 async function retry(){await ready;if(!user)throw Error('请先登录。');if(busySync)return;busySync=true;try{for(const r of pending())await add(r);await refresh()}finally{busySync=false}}
 async function migrate(){await ready;if(!user)throw Error('请先登录。');if(busySync)return;busySync=true;try{for(const r of legacy())await add(r);await refresh()}finally{busySync=false}}
 function acceptSession(session){const next=session?.user||null;if(started&&next?.id===user?.id)return;revision++;user=next;records=[];if(user){try{records=readList(cacheKey(user.id))}catch{}phase='loading';message='正在读取云端记录…'}else{phase='signedout';message='登录，让记录保存在云端'}notify();if(started&&user)setTimeout(()=>refresh(),0)}
-const ready=(async()=>{const {data,error}=await client.auth.getSession();if(error){phase='error';message=errorText(error)}acceptSession(data?.session);started=true;return true})();
-client.auth.onAuthStateChange((_event,session)=>{setTimeout(()=>acceptSession(session),0)});
-async function signIn(email){const redirect=new URL(location.pathname.includes('/tutu/')?'../mobile.html':'mobile.html',location.href);redirect.hash='';redirect.search='';const {error}=await client.auth.signInWithOtp({email:email.trim(),options:{emailRedirectTo:redirect.href,shouldCreateUser:true}});if(error)throw Error(errorText(error))}
+let restoring=null;
+function restore(){if(restoring)return restoring;restoring=(async()=>{phase='restoring';message='正在恢复登录…';window.dispatchEvent(new Event('atlas-cloud-state'));try{const {data,error}=await client.auth.getSession();if(error)throw error;const session=data?.session||null;acceptSession(session);if(session?.user){if(storageFailure){phase='error';message=storageFailure}else{phase='ready';message='登录已恢复'}}else{phase='signedout';message='此浏览器、此网址没有有效登录。请在当前浏览器打开邮件链接。'}started=true;notify();return true}catch(error){phase='error';message=storageFailure||('暂时无法恢复登录：'+errorText(error)+' 可以点击重新恢复登录。');started=true;notify();return false}finally{restoring=null}})();return restoring}
+const ready=restore();
+// Re-read the SDK's current session outside its auth lock. Do not apply a stale
+// INITIAL_SESSION snapshot after a newer sign-in/refresh has completed.
+client.auth.onAuthStateChange(()=>{setTimeout(async()=>{await ready;const ok=await restore();if(ok&&user)refresh()},0)});
+async function signIn(email){const probe='between-surfaces.storage-probe';authStorage.setItem(probe,'ok');authStorage.removeItem(probe);storageFailure='';const redirect=new URL(location.pathname.includes('/tutu/')?'../mobile.html':'mobile.html',location.href);redirect.hash='';redirect.search='';const {error}=await client.auth.signInWithOtp({email:email.trim(),options:{emailRedirectTo:redirect.href,shouldCreateUser:true}});if(error)throw Error(errorText(error))}
+async function signInPassword(email,password){const probe='between-surfaces.storage-probe';authStorage.setItem(probe,'ok');authStorage.removeItem(probe);storageFailure='';const {error}=await client.auth.signInWithPassword({email:email.trim(),password});if(error)throw Error(errorText(error));await restore();await refresh()}
+async function setPassword(password){await ready;if(!user)throw Error('请先登录一次，再设置网站密码。');if(password.length<10)throw Error('请使用至少 10 个字符的密码。');const {error}=await client.auth.updateUser({password});if(error)throw Error(errorText(error))}
 async function signOut(){const {error}=await client.auth.signOut({scope:'local'});if(error)throw Error(errorText(error));acceptSession(null)}
-window.AtlasRecords={key:legacyKey,read:()=>records.slice(),add,refresh,retry,migrate,legacy,pending,state,ready,signIn,signOut};
-ready.then(()=>{notify();if(user)refresh()});window.addEventListener('online',()=>{if(user)retry().catch(()=>{})});window.addEventListener('focus',()=>{if(user&&!busySync)refresh()});
+window.AtlasRecords={key:legacyKey,read:()=>records.slice(),add,refresh,retry,migrate,legacy,pending,state,ready,restore,signIn,signInPassword,setPassword,signOut};
+ready.then(()=>{notify();if(user)refresh()});window.addEventListener('online',async()=>{await restore();if(user)retry().catch(()=>{})});window.addEventListener('focus',()=>{if(user&&!busySync)refresh()});
 })();
 
