@@ -4,12 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#070707">
-  <title>TUTU · Map V2</title>
+  <title>TUTU · Map V3</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' fill='%23070707'/%3E%3Ccircle cx='20' cy='20' r='5' fill='%23ccc5b8'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css?v=live-4">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-</head>
-<body>
+<style>
+html,body{background:#000!important;overflow:hidden;width:100%;height:100%}
+main{height:100dvh!important;min-height:0!important;max-height:none!important;background:#000}
+main> :not(#universe){display:none!important}
+#universe{position:fixed!important;inset:0!important;width:100%;height:100%;background:#000}
+#universe> :not(#star-canvas):not(#stars){display:none!important}
+#stars{display:none!important}
+</style></head>
+<body data-touch-map="true">
 <main>
   <header>
     <a class="brand" href="./map-v2.html">TUTU<span>MAP V2 · A TOUCH ATLAS</span></a>
@@ -92,6 +99,8 @@
 <script src="../shared/cloud-config.js"></script>
 <script src="../shared/records.js?v=live-4"></script>
 <script src="diary.js?v=live-4"></script>
-<script src="app.js?v=live-9"></script>
+<script src="touch-link.js?v=2"></script>
+<script src="map-v3-input.js?v=2"></script>
+<script src="app.js?v=touch-v3-2"></script>
 </body>
 </html>

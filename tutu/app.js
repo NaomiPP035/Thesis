@@ -2,10 +2,49 @@
 
 // Visual recency belongs to this viewing session. It never changes an event's date
 // or assigns a notice / un-notice state to a source record.
+const touchMapMode = document.body.dataset.touchMap === 'true';
 const $ = selector => document.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const safeColor = value => /^#[0-9a-f]{6}$/i.test(value || '') ? value : '#ccc5b8';
-const base = window.ATLAS_DIARY.map(r => ({...r, key:r.key, color:safeColor(r.color)}));
+const REAL_PLACES = {
+  home:'8608 Rancho Mangana',
+  school:'ArtCenter South Campus, 950 S Raymond Ave, Pasadena',
+  market:'99 Ranch Market, 140 W Valley Blvd, San Gabriel',
+  gathering:'Blossom Market Hall, 264 S Mission Dr, San Gabriel',
+  yogurt:'Yogurtland, 259 Sierra Madre Villa Ave, Pasadena',
+  bar:'The Blind Donkey, 53 E Union St, Pasadena',
+  library:'Hastings Branch Library, 3325 E Orange Grove Blvd, Pasadena',
+  oldTown:'Old Pasadena, Colorado Blvd & Fair Oaks Ave, Pasadena',
+  park:'Central Park, Pasadena'
+};
+function realPlace(entry) {
+  const place=String(entry.place || '');
+  const route=(from,to)=>`${from} → ${to}`;
+  if(/Home to school/i.test(place)) return route(REAL_PLACES.home,REAL_PLACES.school);
+  if(/School to home/i.test(place)) return route(REAL_PLACES.school,REAL_PLACES.home);
+  if(/School to the Chinese supermarket/i.test(place)) return route(REAL_PLACES.school,REAL_PLACES.market);
+  if(/Supermarket to home/i.test(place)) return route(REAL_PLACES.market,REAL_PLACES.home);
+  if(/Home to Mila/i.test(place)) return route(REAL_PLACES.home,REAL_PLACES.gathering);
+  if(/Mila.+to school/i.test(place)) return route(REAL_PLACES.gathering,REAL_PLACES.school);
+  if(/Home to the frozen yogurt shop/i.test(place)) return route(REAL_PLACES.home,REAL_PLACES.yogurt);
+  if(/Frozen yogurt shop to the bar/i.test(place)) return route(REAL_PLACES.yogurt,REAL_PLACES.bar);
+  if(/Old Town bar to home/i.test(place)) return route(REAL_PLACES.bar,REAL_PLACES.home);
+  if(/Home to Hillside Library/i.test(place)) return route(REAL_PLACES.home,REAL_PLACES.library);
+  if(/Hillside Library to home/i.test(place)) return route(REAL_PLACES.library,REAL_PLACES.home);
+  if(/Chinese supermarket/i.test(place)) return REAL_PLACES.market;
+  if(/Mila/i.test(place)) return REAL_PLACES.gathering;
+  if(/Frozen yogurt|Near the frozen yogurt/i.test(place)) return REAL_PLACES.yogurt;
+  if(/Old Town bar/i.test(place)) return REAL_PLACES.bar;
+  if(/Hillside Library/i.test(place)) return REAL_PLACES.library;
+  if(/School|classroom|studio/i.test(place)) return REAL_PLACES.school;
+  if(/Bedroom|bathroom|Shared kitchen|Front door|Getting dressed/i.test(place)) return REAL_PLACES.home;
+  if(/Home or school/i.test(place)) return Number(entry.key?.slice(-1))%2 ? REAL_PLACES.home : REAL_PLACES.school;
+  if(/Between the two places/i.test(place)) return REAL_PLACES.oldTown;
+  if(/Changes with the activity/i.test(place)) return /class|design|presentation/i.test(entry.scene || '') ? REAL_PLACES.school : REAL_PLACES.home;
+  if(/Location unknown/i.test(place)) return REAL_PLACES.park;
+  return place || REAL_PLACES.park;
+}
+const base = window.ATLAS_DIARY.map(r => ({...r, key:r.key, place:realPlace(r), color:safeColor(r.color)}));
 let entries = [...base], dated = [], byKey = new Map(), sequenceIndex = new Map();
 let cursor = 0, focusedKey = '', returned = false, playing = false, timer = null;
 let nodes = new Map(), particles = new Map(), width = 1, height = 1;
@@ -129,7 +168,7 @@ function paintStars() {
     ctx.globalAlpha=p.alpha;
     ctx.drawImage(sprite.tile,p.sx-extent/2,p.sy-extent/2,extent,extent);
     const front=entry.key===focusedKey, hovered=entry.key===hoverKey, keyboard=entry.key===keyboardKey;
-    if(front || !entry.date || hovered || keyboard) {
+    if(!touchMapMode && (front || !entry.date || hovered || keyboard)) {
       ctx.beginPath(); ctx.lineWidth=1;
       ctx.strokeStyle=!entry.date?'#c7bca32a':front?'#d3c2a655':'#b5a589';
       ctx.setLineDash(!entry.date?[2,2]:[]);
@@ -148,7 +187,7 @@ function hitStar(clientX,clientY) {
   return null;
 }
 function activateStar(entry) {
-  if(!entry || performance.now()<suppressClickUntil) return;
+  if(touchMapMode || !entry || performance.now()<suppressClickUntil) return;
   stopPlayback();
   if(focusedKey===entry.key) openDetail(); else bringForward(entry.key);
 }
@@ -162,7 +201,10 @@ function dateLabel(date, options = {}) {
     .format(new Date(Date.UTC(year, month - 1, day)));
 }
 function timeLabel(entry) {
-  return [dateLabel(entry.date, {year:'numeric'}), entry.time].filter(Boolean).join(' · ');
+  const time=String(entry.time || 'Time not recorded')
+    .replace(/\s*·\s*(provisional placement|location reconstructed|change of location reconstructed|reconstructed scene|reconstructed|sequence inferred).*$/i,'')
+    .replace(/^Date unknown$/i,'Time not recorded');
+  return [time,dateLabel(entry.date,{year:'numeric'}),entry.place || 'Location not recorded'].join(' · ');
 }
 function seedFor(key) {
   let hash = 2166136261;
@@ -301,6 +343,12 @@ function frame(now) {
   const dt = Math.min(.05,(now-previousFrame)/1000 || .016); previousFrame=now;
   if (!document.hidden) {
     attentionTime += dt;
+    if(touchMapMode && window.AtlasTouchInput){
+      const input=window.AtlasTouchInput;
+      input.tick(dt);
+      turnTarget+=input.dx;pitchTarget-=input.dy;input.dx=input.dy=0;
+      targetDistance=3.1-input.pressure*.65;
+    }
     const modal = !!document.querySelector('dialog[open]');
     if(modal) {requestAnimationFrame(frame);return;}
     const ease = reduced ? 1 : 1-Math.exp(-dt*3.2);
@@ -339,7 +387,7 @@ function frame(now) {
       // attention changes brightness only, so selecting a star cannot enlarge it.
       const size=Math.min(20,Math.max(p.baseSize,.35+recency*4.85)*scale);
       const projectedAlpha=Math.min(.98,(p.luminance+strength*.6)*Math.pow(scale,1.6));
-      const alpha=Math.max(projectedAlpha,strength*.72)*birth;
+      const alpha=Math.min(1,Math.max(projectedAlpha,strength*.72)*birth+(touchMapMode?(window.AtlasTouchInput?.pressure||0)*.32:0));
       const bornSize=size*(.32+birth*.68);
       if (p.sx === null) {p.sx=targetX; p.sy=targetY;}
       p.sx+=(targetX-p.sx)*ease; p.sy+=(targetY-p.sy)*ease;
@@ -353,7 +401,7 @@ function frame(now) {
 }
 function hidePreview() {hoverKey=''; preview.hidden=true;}
 function showPreview(entry) {
-  if (drag || document.querySelector('dialog[open]')) return;
+  if (touchMapMode || drag || document.querySelector('dialog[open]')) return;
   hoverKey=entry.key;
   preview.innerHTML=`<span>${escapeHTML(timeLabel(entry))}</span><strong>${escapeHTML(entry.title)}</strong>`;
   preview.hidden=false;
@@ -417,7 +465,7 @@ document.querySelectorAll('[data-close]').forEach(button=>button.addEventListene
 document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('close',()=>{returningFocus?.focus?.({preventScroll:true});hidePreview();}));
 function openDetail() {
   const entry=byKey.get(focusedKey); if(!entry) return;
-  const fields=[['PLACE',entry.place],['BODY',entry.body],['SURFACE',entry.object],['SENSATION',entry.texture],['CONTACT PATTERN',entry.contactForm],['MOOD',entry.mood || 'Not reported']];
+  const fields=[['PLACE',entry.place],['BODY',entry.body],['SURFACE',entry.object],['SENSATION',entry.texture],['MOOD',entry.mood || 'Not reported']];
   $('#detail-body').innerHTML=`<p class="eyebrow">${escapeHTML(entry.key)} · TOUCH</p>
     <h2 id="detail-title">${escapeHTML(entry.title)}</h2><p class="moment-date">${escapeHTML(timeLabel(entry))}</p>
     <blockquote class="quote">${escapeHTML(entry.text)}</blockquote>
