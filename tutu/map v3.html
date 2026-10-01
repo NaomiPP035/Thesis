@@ -13,9 +13,9 @@ html,body{background:#000!important;overflow:hidden;width:100%;height:100%}
 main{height:100dvh!important;min-height:0!important;max-height:none!important;background:#000}
 main> :not(#universe){display:none!important}
 #universe{position:fixed!important;inset:0!important;width:100%;height:100%;background:#000}
-#universe> :not(#star-canvas):not(#stars){display:none!important}
+#universe> :not(#star-canvas):not(#stars):not(#background-video){display:none!important}
 #stars{display:none!important}
-</style></head>
+#background-video{position:absolute;inset:-2%;width:104%;height:104%;z-index:0;pointer-events:none}#star-canvas{z-index:1}</style></head>
 <body data-touch-map="true">
 <main>
   <header>
@@ -99,8 +99,8 @@ main> :not(#universe){display:none!important}
 <script src="../shared/cloud-config.js"></script>
 <script src="../shared/records.js?v=live-4"></script>
 <script src="diary.js?v=live-4"></script>
-<script src="touch-link.js?v=2"></script>
-<script src="map-v3-input.js?v=2"></script>
-<script src="app.js?v=touch-v3-2"></script>
+<script src="touch-link.js?v=3"></script>
+<script src="map-v3-input.js?v=3"></script>
+<script src="background-store.js?v=3"></script><script src="video-background.js?v=3"></script><script src="app.js?v=touch-v3-3"></script>
 </body>
 </html>

@@ -395,6 +395,7 @@ function frame(now) {
       p.blur+=((.6+(1-strength)*.4+(1-birth)*1.1)-p.blur)*ease;
       drawn.push({entry,p,depth:Math.round(1000/viewZ)});
     }
+    if(touchMapMode) window.AtlasBackground?.step(drawn,width,height,dt,now);
     paintStars();
   }
   requestAnimationFrame(frame);
