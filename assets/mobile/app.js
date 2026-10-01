@@ -396,7 +396,6 @@ $('#colors').innerHTML = palette.map(color =>
   `<button type="button" style="--swatch:${color}" aria-label="Choose color ${color}" aria-pressed="${color === $('#color').value}" data-color="${color}"></button>`
 ).join('');
 function colorChanged() {
-  document.documentElement.style.setProperty('--accent', $('#color').value);
   document.querySelectorAll('[data-color]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.color === $('#color').value));
   });

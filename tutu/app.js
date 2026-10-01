@@ -17,6 +17,35 @@ let syncSignature = '', returningFocus = null;
 let attentionTime = 0;
 const noticedAt = new Map();
 const FADE_SECONDS = 22;
+const BIRTH_SECONDS = 4.2;
+let audioContext = null;
+function unlockAudio() {
+  const AudioEngine = window.AudioContext || window.webkitAudioContext;
+  if (!AudioEngine) return;
+  audioContext ||= new AudioEngine();
+  if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+}
+function playBirthNote() {
+  if (!audioContext || audioContext.state !== 'running') return;
+  const notes = [60, 62, 64, 67, 69, 72, 74];
+  const midi = notes[Math.floor(Math.random() * notes.length)];
+  const frequency = 440 * Math.pow(2, (midi - 69) / 12);
+  const now = audioContext.currentTime;
+  [[1, .11, 1.8], [2, .032, 1.15], [3, .012, .72]].forEach(([multiple, volume, decay]) => {
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(frequency * multiple, now);
+    gain.gain.setValueAtTime(.0001, now);
+    gain.gain.exponentialRampToValueAtTime(volume, now + .012);
+    gain.gain.exponentialRampToValueAtTime(.0001, now + decay);
+    oscillator.connect(gain).connect(audioContext.destination);
+    oscillator.start(now);
+    oscillator.stop(now + decay + .05);
+  });
+}
+window.addEventListener('pointerdown', unlockAudio, {once:true});
+window.addEventListener('keydown', unlockAudio, {once:true});
 function brighten(key) { noticedAt.set(key, attentionTime); }
 function resetAttention() {
   noticedAt.clear();
@@ -288,6 +317,11 @@ function frame(now) {
       const front=entry.key===focusedKey;
       const elapsed=Math.max(0,attentionTime-(noticedAt.get(entry.key) ?? attentionTime-220));
       const strength=Math.exp(-elapsed/FADE_SECONDS);
+      const index=sequenceIndex.get(entry.key);
+      const recency=index===undefined?0:Math.exp(-(dated.length-1-index)/18);
+      const birthAge=p.birthAt===undefined?Infinity:Math.max(0,attentionTime-p.birthAt);
+      const birthLinear=reduced?1:Math.min(1,birthAge/BIRTH_SECONDS);
+      const birth=1-Math.pow(1-birthLinear,3);
       const bob=drifting && !reduced ? Math.sin(driftTime*.36+p.phase)*.007 : 0;
       // Same volumetric distribution and two-axis perspective rotation as V1.
       const x=p.x*cosY+p.z*sinY, z0=-p.x*sinY+p.z*cosY;
@@ -301,12 +335,16 @@ function frame(now) {
       // Continuous intrinsic variation, depth and attention all contribute.
       // Moving the camera closer reveals small, nearly invisible background points.
       const scale=Math.min(8,2.6/viewZ);
-      const size=Math.min(20,(p.baseSize+strength*2.8)*scale);
-      const alpha=Math.min(.98,(p.luminance+strength*.6)*Math.pow(scale,1.6));
+      // Date recency gives new moments a reliable visible scale. Returning
+      // attention changes brightness only, so selecting a star cannot enlarge it.
+      const size=Math.min(20,Math.max(p.baseSize,.35+recency*4.85)*scale);
+      const projectedAlpha=Math.min(.98,(p.luminance+strength*.6)*Math.pow(scale,1.6));
+      const alpha=Math.max(projectedAlpha,strength*.72)*birth;
+      const bornSize=size*(.32+birth*.68);
       if (p.sx === null) {p.sx=targetX; p.sy=targetY;}
       p.sx+=(targetX-p.sx)*ease; p.sy+=(targetY-p.sy)*ease;
-      p.size+=(size-p.size)*ease; p.alpha+=(alpha-p.alpha)*ease;
-      p.blur+=((.6+(1-strength)*.4)-p.blur)*ease;
+      p.size+=(bornSize-p.size)*ease; p.alpha+=(alpha-p.alpha)*ease;
+      p.blur+=((.6+(1-strength)*.4+(1-birth)*1.1)-p.blur)*ease;
       drawn.push({entry,p,depth:Math.round(1000/viewZ)});
     }
     paintStars();
@@ -466,6 +504,7 @@ function syncSaved() {
   catch(error){console.warn('Could not read saved touch records:',error.message);return;}
   const signature=JSON.stringify(incoming);
   if(signature===syncSignature) return;
+  const firstSync=!syncSignature;
   syncSignature=signature;
   const formerKeys=new Set(entries.map(e=>e.key)), formerCursorKey=dated[cursor]?.key;
   const wasAtLatest=cursor>=dated.length-1;
@@ -475,7 +514,13 @@ function syncSaved() {
   cursor=wasAtLatest?dated.length-1:(sequenceIndex.get(formerCursorKey) ?? dated.length-1);
   focusedKey=byKey.has(oldFocus)?oldFocus:dated[cursor]?.key;
   const additions=entries.filter(e=>e.sourceId&&!formerKeys.has(e.key));
-  if(additions.length){stopPlayback();bringForward(additions[additions.length-1].key,'NEW FROM YOUR LOG');}
+  if(additions.length){
+    if(!firstSync) {
+      additions.forEach(entry=>{const particle=particles.get(entry.key);if(particle)particle.birthAt=attentionTime;});
+      playBirthNote();
+    }
+    stopPlayback();bringForward(additions[additions.length-1].key,'NEW FROM YOUR LOG');
+  }
   else renderFocus();
   if($('#archive').open) renderArchive();
   if($('#detail').open) {
