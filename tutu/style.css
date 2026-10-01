@@ -26,3 +26,6 @@ dialog{position:fixed;color:var(--ink);background:#111210;border:1px solid #3434
 #star-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 #stars{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);pointer-events:none}
 .star-accessible{position:absolute;width:1px;height:1px;padding:0;border:0;overflow:hidden}
+
+/* More recording dates remain reachable without shrinking their labels. */
+#days{overflow-x:auto;scrollbar-width:thin}#days button{flex-shrink:0}

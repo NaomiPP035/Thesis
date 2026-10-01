@@ -1,5 +1,91 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#090e14"><title>Record a Moment · TUTU</title><link rel="stylesheet" href="assets/mobile/style.css?v=versions-1"><link rel="stylesheet" href="shared/cloud.css?v=en-1"><meta name="referrer" content="strict-origin-when-cross-origin"></head><body><main class="phone"><header><a href="tutu/map-v2.html" aria-label="Back to Map V2">✦</a><span>TUTU</span><nav aria-label="Atlas versions"><a href="tutu/map-v1.html">MAP V1 ↗</a> · <a href="tutu/map-v2.html">MAP V2 ↗</a></nav></header>
-<section id="capture"><div class="heading"><p class="eyebrow" id="today"></p><h1>Hold on to this moment.</h1><p>What did you just touch—<br>and what did it leave with you?</p></div><button id="record" class="orb" aria-label="Hold to speak, release to finish"><canvas id="particles" aria-hidden="true"></canvas><span class="orb-center"><svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v4M8 22h8"/></svg></span></button><div class="record-status"><strong id="record-label">Hold and tell me what just happened</strong><span id="timer">Release when you are done · It does not have to sound polished</span></div><div class="voice-language" aria-label="Spoken language"><span>SPEAKING</span><button type="button" data-speech-lang="zh-CN" aria-pressed="true">中文</button><button type="button" data-speech-lang="en-US" aria-pressed="false">EN</button></div><p id="live" aria-live="polite"></p><button id="type" class="text-button">Or take your time and write it down <span>↗</span></button><p class="support" id="support"></p></section>
-<section id="review" hidden><div class="review-top"><button id="back" class="text-button">← BACK</button><span class="eyebrow">REVIEW YOUR MOMENT</span></div><h1>This is your moment.</h1><p class="sub">Edit it, add to it—keep going until it sounds like you.</p><form id="form"><label>Your words<textarea id="transcript" rows="4" required maxlength="5000" placeholder="What just happened? What did your body notice? How did it feel?"></textarea></label><p class="helper">Keep it in your own voice. Add whatever matters below, and leave the rest blank.</p><label>Give this moment a name<input id="title" maxlength="80" placeholder="Generated automatically from your words"></label><div class="two"><label>When<input id="when" type="datetime-local" required></label><label>Where<input id="place" maxlength="120" placeholder="Finding your location…"><small id="location-status" class="field-note" aria-live="polite">Finding your location…</small></label></div><label>What you touched<input id="object" maxlength="160" placeholder="For example: water, glass, fabric"></label><label>Body<input id="body" maxlength="160" placeholder="For example: palm, nose, soles of my feet"></label><fieldset><legend>How did you sense it?</legend><div class="chips"><label><input type="checkbox" value="Touch" checked>Touch</label><label><input type="checkbox" value="Sight">Sight</label><label><input type="checkbox" value="Smell">Smell</label><label><input type="checkbox" value="Sound">Sound</label><label><input type="checkbox" value="Taste">Taste</label></div></fieldset><label>Texture and mood<input id="mood" maxlength="200" placeholder="It can be mixed, contradictory, or barely there"></label><fieldset><legend>Choose a color for it</legend><div id="colors"></div><label class="custom-color">Adjust it until it feels right<input id="color" type="color" value="#94b9ad" aria-label="Custom star color"></label></fieldset><p id="form-status" role="status"></p><button class="primary" id="send" type="submit">SEND THIS MOMENT INTO THE ATLAS <span>↗</span></button><p class="helper storage-note">Sign in to keep it in the cloud. If the connection fails, your draft stays here so you can try again.</p></form></section>
-<section id="success" hidden><div class="new-star" id="new-star"></div><p class="eyebrow">A MOMENT, NOW A STAR</p><h1>This moment has a place now.</h1><p id="saved-title"></p><a class="primary" href="tutu/map-v2.html" id="view-star">SEE IT IN MAP V2 ↗</a><a class="text-button" href="tutu/map-v1.html" id="view-star-v1">SEE IT IN MAP V1 ↗</a><button id="another" class="text-button">RECORD ANOTHER MOMENT</button><p class="helper">Saved to the cloud. Sign in with the same account to find it on another device.</p></section><footer>Every feeling deserves to be noticed.</footer></main><script src="shared/vendor/supabase-2.117.1.js"></script><script src="shared/cloud-config.js"></script><script src="shared/records.js?v=en-1"></script><script src="shared/cloud-ui.js?v=en-1"></script><script src="assets/mobile/app.js?v=versions-1"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#090e14">
+  <title>Record a Moment · TUTU</title>
+  <link rel="stylesheet" href="assets/mobile/style.css?v=mobile-tabs-2">
+  <link rel="stylesheet" href="shared/cloud.css?v=mobile-tabs-2">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+</head>
+<body>
+<main class="phone">
+  <header>
+    <a href="tutu/map-v2.html" aria-label="Open Map V2">✦</a>
+    <span>TUTU</span>
+    <a href="tutu/map-v2.html">MAP ↗</a>
+  </header>
 
+  <section id="capture" class="app-screen capture-screen">
+    <div class="heading"><h1>What just happen?</h1></div>
+    <button id="record" class="orb" aria-label="Hold to speak, release to finish">
+      <canvas id="particles" aria-hidden="true"></canvas>
+      <span class="orb-center">
+        <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="12" rx="3"/>
+          <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v4M8 22h8"/>
+        </svg>
+      </span>
+    </button>
+    <div class="voice-language" aria-label="Spoken language">
+      <span>SPEAKING</span>
+      <button type="button" data-speech-lang="zh-CN" aria-pressed="true">中文</button>
+      <button type="button" data-speech-lang="en-US" aria-pressed="false">EN</button>
+    </div>
+    <p id="live" aria-live="polite"></p>
+    <p id="support" class="support"></p>
+  </section>
+
+  <section id="review" class="app-screen" hidden>
+    <div class="review-top"><span class="eyebrow">WRITE IT DOWN</span></div>
+    <h1>This is your moment.</h1>
+    <form id="form">
+      <label>Your words<textarea id="transcript" rows="4" required maxlength="5000" placeholder="What just happened? What did your body notice? How did it feel?"></textarea></label>
+      <label>Give this moment a name<input id="title" maxlength="80" placeholder="Generated automatically from your words"></label>
+      <div class="two">
+        <label>When<input id="when" type="datetime-local" required></label>
+        <label>Where<input id="place" maxlength="120" placeholder="Finding your location…"><small id="location-status" class="field-note" aria-live="polite">Finding your location…</small></label>
+      </div>
+      <label>What you touched<input id="object" maxlength="160" placeholder="For example: water, glass, fabric"></label>
+      <label>Body<input id="body" maxlength="160" placeholder="For example: palm, nose, soles of my feet"></label>
+      <label>Texture and mood<input id="mood" maxlength="200" placeholder="It can be mixed, contradictory, or barely there"></label>
+      <fieldset>
+        <legend>Choose a color for it</legend>
+        <div id="colors"></div>
+        <label class="custom-color">Adjust it until it feels right<input id="color" type="color" value="#ef596f" aria-label="Custom star color"></label>
+      </fieldset>
+      <p id="form-status" role="status"></p>
+      <button class="primary" id="send" type="submit">SEND THIS MOMENT INTO THE ATLAS <span>↗</span></button>
+    </form>
+  </section>
+
+  <section id="settings" class="app-screen settings-screen" hidden>
+    <p class="eyebrow">SETTINGS</p>
+    <h1>Your cloud.</h1>
+    <div id="cloud-dialog" class="cloud-settings-panel"></div>
+  </section>
+
+  <section id="success" class="app-screen" hidden>
+    <div class="new-star" id="new-star"></div>
+    <p class="eyebrow">A MOMENT, NOW A STAR</p>
+    <h1>This moment has a place now.</h1>
+    <p id="saved-title"></p>
+    <a class="primary" href="tutu/map-v2.html" id="view-star">SEE IT IN MAP V2 ↗</a>
+    <a class="text-button" href="tutu/map-v1.html" id="view-star-v1">SEE IT IN MAP V1 ↗</a>
+    <button id="another" class="text-button">RECORD ANOTHER MOMENT</button>
+  </section>
+
+  <nav class="bottom-nav" aria-label="Record navigation">
+    <button type="button" data-screen="capture" aria-current="page"><span class="nav-icon">●</span><span>Record</span></button>
+    <button type="button" data-screen="review"><span class="nav-icon">＋</span><span>Write</span></button>
+    <button type="button" data-screen="settings"><span class="nav-icon">○</span><span>Settings</span></button>
+  </nav>
+</main>
+<script src="shared/vendor/supabase-2.117.1.js"></script>
+<script src="shared/cloud-config.js"></script>
+<script src="shared/records.js?v=live-4"></script>
+<script src="shared/cloud-ui.js?v=mobile-tabs-2"></script>
+<script src="assets/mobile/app.js?v=mobile-tabs-2"></script>
+</body>
+</html>

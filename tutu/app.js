@@ -195,7 +195,6 @@ function renderStars() {
 function renderFocus(label) {
   const entry = byKey.get(focusedKey);
   if (!entry) return;
-  $('#focus-state').textContent = label || (returned ? 'BACK IN VIEW' : 'IN VIEW');
   $('#focus-date').textContent = timeLabel(entry);
   $('#focus-title').textContent = entry.title;
   $('#focus-copy').textContent = entry.text;
@@ -459,20 +458,21 @@ function cloudEntry(record) {
   const date=valid?new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'}).format(when):null;
   return {...record, key:'cloud-'+record.id, sourceId:record.id, date,
     time:valid?when.toLocaleTimeString('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',minute:'2-digit'}):'',
-    evidence:'Personal log',color:safeColor(record.color),texture:'Not separately recorded',contactForm:'Not recorded',senses:['Touch']};
+    evidence:'Personal log',color:safeColor(record.color),texture:'Not separately recorded',contactForm:'Not recorded',senses:record.senses?.length?record.senses:['Touch']};
 }
 function syncSaved() {
   let incoming=[];
-  try {incoming=(window.AtlasRecords?.read() || []).filter(r=>r.senses?.some(s=>s==='Touch'||s==='触觉'));}
+  try {incoming=(window.AtlasRecords?.read() || []);}
   catch(error){console.warn('Could not read saved touch records:',error.message);return;}
   const signature=JSON.stringify(incoming);
   if(signature===syncSignature) return;
   syncSignature=signature;
   const formerKeys=new Set(entries.map(e=>e.key)), formerCursorKey=dated[cursor]?.key;
+  const wasAtLatest=cursor>=dated.length-1;
   const oldFocus=focusedKey;
   entries=[...base,...incoming.map(cloudEntry)];
   rebuildIndex(); renderStars();
-  cursor=sequenceIndex.get(formerCursorKey) ?? dated.length-1;
+  cursor=wasAtLatest?dated.length-1:(sequenceIndex.get(formerCursorKey) ?? dated.length-1);
   focusedKey=byKey.has(oldFocus)?oldFocus:dated[cursor]?.key;
   const additions=entries.filter(e=>e.sourceId&&!formerKeys.has(e.key));
   if(additions.length){stopPlayback();bringForward(additions[additions.length-1].key,'NEW FROM YOUR LOG');}

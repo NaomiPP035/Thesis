@@ -17,7 +17,31 @@ function validate(r){if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 async function add(input){await ready;if(!user)throw Error('Sign in before saving this moment to the cloud.');const r=validate(input),uid=user.id;const queued=readList(queueKey(uid));const index=queued.findIndex(x=>x.id===r.id);if(index>=0)queued[index]=r;else queued.push(r);localStorage.setItem(queueKey(uid),JSON.stringify(queued));revision++;phase='saving';message='Saving to the cloud…';notify();
 try{const {data,error}=await client.from('atlas_moments').upsert({id:r.id,user_id:uid,payload:r},{onConflict:'id'}).select('id,payload,user_id').single();if(error)throw error;if(!data||data.id!==r.id||data.user_id!==uid)throw Error('The database has not confirmed the save yet. Please try again.');const left=readList(queueKey(uid)).filter(x=>x.id!==r.id);localStorage.setItem(queueKey(uid),JSON.stringify(left));if(user?.id===uid){records=records.filter(x=>x.id!==r.id);records.push({...data.payload,id:data.id});revision++;cache();phase='ready';message='Saved to the cloud';notify()}return r;
 }catch(error){if(user?.id===uid){phase='error';message=errorText(error)+' This moment is still waiting to sync.';notify()}throw Error(errorText(error))}}
-async function refresh(){await ready;if(!user)return;const uid=user.id,version=revision;phase='loading';message='Loading cloud moments…';window.dispatchEvent(new Event('atlas-cloud-state'));try{const list=[];for(let offset=0;;offset+=500){const {data,error}=await client.from('atlas_moments').select('id,payload').eq('user_id',uid).order('created_at',{ascending:true}).order('id',{ascending:true}).range(offset,offset+499);if(error)throw error;list.push(...data.map(row=>({...row.payload,id:row.id})));if(data.length<500)break}if(user?.id!==uid||revision!==version)return;records=list;cache();phase='ready';message='Loaded '+records.length+' cloud moment(s)';notify()}catch(error){if(user?.id===uid){phase='error';message=errorText(error)+(records.length?' Showing the last cached copy.':'');notify()}}}
+async function fetchRecords({silent=false}={}){await ready;if(!user)return;const uid=user.id,version=revision;if(!silent){phase='loading';message='Loading cloud moments…';window.dispatchEvent(new Event('atlas-cloud-state'));}try{const list=[];for(let offset=0;;offset+=500){const {data,error}=await client.from('atlas_moments').select('id,payload').eq('user_id',uid).order('created_at',{ascending:true}).order('id',{ascending:true}).range(offset,offset+499);if(error)throw error;list.push(...data.map(row=>({...row.payload,id:row.id})));if(data.length<500)break}if(user?.id!==uid||revision!==version)return;const changed=JSON.stringify(records)!==JSON.stringify(list);records=list;if(changed)cache();if(!silent||phase==='loading'||phase==='error'){phase='ready';message='Loaded '+records.length+' cloud moment(s)';}pollFailures=0;if(changed||!silent)notify()}catch(error){if(user?.id===uid){pollFailures++;if(!silent){phase='error';message=errorText(error)+(records.length?' Showing the last cached copy.':'');notify()}}}}
+// One request at a time. Poll data only; never reload the page or reset the camera.
+let refreshFlight=null,pollTimer=null,pollFailures=0;
+function refresh(options){
+ if(refreshFlight)return refreshFlight;
+ refreshFlight=fetchRecords(options).finally(()=>{refreshFlight=null});
+ return refreshFlight;
+}
+function schedulePoll(){
+ clearTimeout(pollTimer);
+ const base=document.hidden?30000:5000;
+ const delay=Math.min(60000,base*Math.pow(2,Math.min(pollFailures,3)));
+ pollTimer=setTimeout(async()=>{
+  try{if(user&&!busySync&&navigator.onLine!==false)await refresh({silent:true})}
+  finally{schedulePoll()}
+ },delay);
+}
+function checkNow(){
+ if(user&&!busySync&&navigator.onLine!==false)refresh({silent:true});
+ schedulePoll();
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkNow();else schedulePoll()});
+window.addEventListener('storage',event=>{
+ if(user && event.key===cacheKey(user.id))checkNow();
+});
 async function retry(){await ready;if(!user)throw Error('Sign in first.');if(busySync)return;busySync=true;try{for(const r of pending())await add(r);await refresh()}finally{busySync=false}}
 async function migrate(){await ready;if(!user)throw Error('Sign in first.');if(busySync)return;busySync=true;try{for(const r of legacy())await add(r);await refresh()}finally{busySync=false}}
 function acceptSession(session){const next=session?.user||null;if(started&&next?.id===user?.id)return;revision++;user=next;records=[];if(user){try{records=readList(cacheKey(user.id))}catch{}phase='loading';message='Loading cloud moments…'}else{phase='signedout';message='Sign in to keep your moments in the cloud'}notify();if(started&&user)setTimeout(()=>refresh(),0)}
@@ -32,6 +56,6 @@ async function signInPassword(email,password){const probe='between-surfaces.stor
 async function setPassword(password){await ready;if(!user)throw Error('Sign in once before setting a site password.');if(password.length<10)throw Error('Use a password with at least 10 characters.');const {error}=await client.auth.updateUser({password});if(error)throw Error(errorText(error))}
 async function signOut(){const {error}=await client.auth.signOut({scope:'local'});if(error)throw Error(errorText(error));acceptSession(null)}
 window.AtlasRecords={key:legacyKey,read:()=>records.slice(),add,refresh,retry,migrate,legacy,pending,state,ready,restore,signIn,signInPassword,setPassword,signOut};
-ready.then(()=>{notify();if(user)refresh()});window.addEventListener('online',async()=>{await restore();if(user)retry().catch(()=>{})});window.addEventListener('focus',()=>{if(user&&!busySync)refresh()});
+ready.then(()=>{notify();if(user)refresh();schedulePoll()});window.addEventListener('online',async()=>{await restore();if(user)retry().catch(()=>{})});window.addEventListener('focus',checkNow);
 })();
 
