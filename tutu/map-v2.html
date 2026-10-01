@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070707">
+  <title>TUTU · Map V2</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' fill='%23070707'/%3E%3Ccircle cx='20' cy='20' r='5' fill='%23ccc5b8'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css?v=warm-3">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+</head>
+<body>
+<main>
+  <header>
+    <a class="brand" href="./map-v2.html">TUTU<span>MAP V2 · A TOUCH ATLAS</span></a>
+    <nav aria-label="Main navigation">
+      <a href="map-v1.html">Map V1 ↗</a>
+      <a href="../mobile.html">Record a moment ↗</a>
+      <button id="archive-open">All entries <span id="total"></span></button>
+      <button id="about">About this atlas ↗</button>
+    </nav>
+  </header>
+
+  <section class="intro" aria-label="Touch and attention">
+    <p class="eyebrow">01 — A STUDY OF EVERYDAY TOUCH</p>
+    <h1>Still there.<br><em>Out of mind.</em></h1>
+    <p class="research">Contact can stay.<br>Our attention moves on.</p>
+    <div class="focus-card" id="focus-card">
+      <p class="eyebrow" id="focus-state">IN VIEW</p>
+      <p class="moment-date" id="focus-date"></p>
+      <h2 id="focus-title" tabindex="0" role="button" aria-label="Open selected entry details"></h2>
+      <p id="focus-copy"></p>
+    </div>
+  </section>
+
+  <section id="universe" aria-label="Touch records: select a star to bring it back into view">
+    <div id="stars"></div>
+    <div class="field-controls">
+      <button id="motion" aria-pressed="true">Pause drift</button>
+      <button id="home-view">Reset view</button>
+    </div>
+    <p class="field-hint">Move to turn · drag to explore<br>Scroll to move closer or further away.</p>
+  </section>
+
+  <section class="sequence" aria-label="Replay the touch records">
+    <div class="sequence-top"><p class="eyebrow">FOLLOW THE RECORDS</p><span id="sequence-count"></span></div>
+    <div id="days" aria-label="Jump to a day"></div>
+    <div class="playback">
+      <button id="play" class="play-button" aria-pressed="false">Replay ▷</button>
+      <button id="previous" aria-label="Previous record">←</button>
+      <label class="sr-only" for="position">Position in the dated record sequence</label>
+      <input id="position" type="range" min="0" value="0" step="1">
+      <button id="next" aria-label="Next record">→</button>
+      <label class="sr-only" for="speed">Replay speed</label>
+      <select id="speed"><option value="3000">1×</option><option value="1500">2×</option><option value="750">4×</option></select>
+    </div>
+    <div class="sequence-foot"><span>Record order, not measured attention time.</span><button id="undated-open"></button></div>
+  </section>
+
+  <aside id="preview" hidden></aside>
+
+  <dialog id="detail" aria-labelledby="detail-title">
+    <button class="close" data-close="detail" aria-label="Close entry">×</button>
+    <div id="detail-body"></div>
+  </dialog>
+
+  <dialog id="archive" aria-labelledby="archive-title">
+    <button class="close" data-close="archive" aria-label="Close entries">×</button>
+    <p class="eyebrow">NOT LOST. JUST FURTHER AWAY.</p>
+    <h2 id="archive-title">Every contact.</h2>
+    <div class="archive-tools">
+      <label class="sr-only" for="search">Search records</label>
+      <input id="search" type="search" placeholder="Search words, e.g. sticky cup or left wrist">
+      <label class="sr-only" for="archive-day">Filter by date</label><select id="archive-day"></select>
+    </div>
+    <p id="archive-count" class="muted" aria-live="polite"></p>
+    <div id="archive-list"></div>
+  </dialog>
+
+  <dialog id="method" aria-labelledby="method-title">
+    <button class="close" data-close="method" aria-label="Close about this atlas">×</button>
+    <p class="eyebrow">ABOUT THIS ATLAS</p>
+    <h2 id="method-title">A contact can outlast<br>my attention.</h2>
+    <p>This log follows everyday touch. A new entry comes forward; earlier entries shrink and soften into the background. Select one and it brightens where it is, then fades at the same rate as a new entry.</p>
+    <p>The movement is a way to explore noticing and no longer noticing. It does not tell us when a real sensation faded, or prove that contact continued.</p>
+    <p>The September 25–30 source contains reported events, reported habits, inferred scenes and unresolved contacts. A row describes a contact type or a step, rather than a count of actual touches. Broad time labels and unknown dates stay as recorded.</p>
+    <p>Colors follow the feeling of each entry: coral for pleasure, soft rose for ease, blue for focus, violet for curiosity, burgundy for tiredness, and deeper reds for irritation. Other feelings can use greens, amber and muted neutrals; each family includes lighter, darker and more saturated shades. Close shades belong to related feelings. Where the source did not describe a mood, the feeling is an editable interpretation, not an observed measurement. Brightness and size still follow depth, visual variation and fading attention.</p>
+    <button id="export" class="outline-button">Export diary ↓</button>
+  </dialog>
+  <p id="announcement" class="sr-only" role="status"></p>
+</main>
+<script src="../shared/vendor/supabase-2.117.1.js"></script>
+<script src="../shared/cloud-config.js"></script>
+<script src="../shared/records.js?v=warm-3"></script>
+<script src="diary.js?v=warm-3"></script>
+<script src="app.js?v=warm-3"></script>
+</body>
+</html>

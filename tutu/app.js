@@ -1,89 +1,498 @@
-const senses=['All','Touch','Sight','Smell','Sound','Taste'];
-const senseAliases={Touch:'Touch',Sight:'Sight',Smell:'Smell',Sound:'Sound',Taste:'Taste','\u89e6\u89c9':'Touch','\u89c6\u89c9':'Sight','\u55c5\u89c9':'Smell','\u542c\u89c9':'Sound','\u5473\u89c9':'Taste'};
-function normalizeSenses(values){return [...new Set((Array.isArray(values)?values:[]).map(v=>senseAliases[v]).filter(Boolean))]}
-// One entry per described experience; do not multiply diary entries for density.
-const entries=window.ATLAS_DIARY.map((r,i)=>({
- id:i+1,diaryId:r.key,title:escapeRecord(r.title),place:escapeRecord(r.place)||'Not recorded',
- object:escapeRecord(r.object)||'Not recorded',body:escapeRecord(r.body)||'Not recorded',
- senses:normalizeSenses(r.senses),mood:escapeRecord(r.mood),color:r.color,texture:escapeRecord(r.texture)||'Not separately described',
- quote:escapeRecord(r.text),action:'',after:'',reflection:'',
- date:r.date,dateEnd:r.dateEnd||'',time:r.time||'',dateUncertain:!!r.dateUncertain
-}));
-const importedIds=new Set();
-function escapeRecord(value){return String(value||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function readNewRecords(){try{return AtlasRecords.read().filter(r=>!importedIds.has(r.id))}catch(err){console.warn('Saved records unavailable',err.message);return[]}}
-function importRecord(r){importedIds.add(r.id);const escaped=Object.fromEntries(['title','place','object','body','mood','text'].map(k=>[k,escapeRecord(r[k])]));return {id:entries.length+1,sourceId:r.id,title:escaped.title,place:escaped.place||'Not entered',object:escaped.object||'Not entered',body:escaped.body||'Not entered',mood:escaped.mood||'Not entered',senses:normalizeSenses(r.senses),color:/^#[0-9a-f]{6}$/i.test(r.color)?r.color:'#94b9ad',texture:escaped.object||'Not entered',quote:escaped.text,action:escaped.text,after:'',reflection:'',recordedAt:r.recordedAt,day:'',time:new Date(r.recordedAt).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',timeZone:'America/Los_Angeles'}),fictional:false}}
-for(const record of readNewRecords())entries.push(importRecord(record));
-// Diary calendar dates stay literal: never turn a day into midnight UTC.
-function calendarLabel(value){
- const [y,m,d]=value.split('-').map(Number);
- const weekday=['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date(Date.UTC(y,m-1,d)).getUTCDay()];
- const month=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][m-1];
- return month+' '+d+', '+y+' · '+weekday;
+'use strict';
+
+// Visual recency belongs to this viewing session. It never changes an event's date
+// or assigns a notice / un-notice state to a source record.
+const $ = selector => document.querySelector(selector);
+const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeColor = value => /^#[0-9a-f]{6}$/i.test(value || '') ? value : '#ccc5b8';
+const base = window.ATLAS_DIARY.map(r => ({...r, key:r.key, color:safeColor(r.color)}));
+let entries = [...base], dated = [], byKey = new Map(), sequenceIndex = new Map();
+let cursor = 0, focusedKey = '', returned = false, playing = false, timer = null;
+let nodes = new Map(), particles = new Map(), width = 1, height = 1;
+let reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let drifting = !reduced, turn = 0, turnTarget = 0, pitch = 0, pitchTarget = 0, distance = 3.1, targetDistance = 3.1;
+let pointerX = 0, pointerY = 0, offsetX = 0, offsetY = 0;
+let drag = null, suppressClickUntil = 0, hoverKey = '', previousFrame = 0, driftTime = 0;
+let syncSignature = '', returningFocus = null;
+let attentionTime = 0;
+const noticedAt = new Map();
+const FADE_SECONDS = 22;
+function brighten(key) { noticedAt.set(key, attentionTime); }
+function resetAttention() {
+  noticedAt.clear();
+  dated.forEach((entry,index) => noticedAt.set(entry.key, attentionTime - Math.max(0,cursor-index)*3));
 }
-function dateLabel(e){
- if(e.date){const label=e.dateEnd?calendarLabel(e.date)+' — '+calendarLabel(e.dateEnd):calendarLabel(e.date);return label+(e.dateUncertain?' · EXACT DATE NOT RECORDED':'')}
- return e.recordedAt?escapeRecord(new Date(e.recordedAt).toLocaleDateString('en-US',{timeZone:'America/Los_Angeles'})):'DATE NOT RECORDED';
+const universe = $('#universe'), preview = $('#preview');
+const canvas = document.createElement('canvas');
+canvas.id = 'star-canvas'; canvas.setAttribute('aria-hidden','true');
+$('#stars').before(canvas);
+const ctx = canvas.getContext('2d', {alpha:true});
+let pixelRatio = 1, drawn = [], keyboardKey = '';
+const sprites = new Map();
+let spriteCursor=0;
+// Cache the original two soft shadows and blurred disc, rather than applying
+// CSS filters and resizing hundreds of composited DOM layers every frame.
+function glowMask(size, blur) {
+  const color = '#ffffff';
+  const diameter = Math.max(.25, Math.round(size*4)/4);
+  const softness = Math.round(blur*10)/10;
+  const key = `${diameter}:${softness}:${pixelRatio}`;
+  if(sprites.has(key)) return sprites.get(key);
+  const extent=diameter+64, pixels=Math.ceil(extent*pixelRatio);
+  const raw=document.createElement('canvas'); raw.width=raw.height=pixels;
+  const r=raw.getContext('2d');
+  r.scale(pixelRatio,pixelRatio);
+  const center=pixels/pixelRatio/2, radius=diameter/2;
+  // Put shadow sources outside the tile, leaving only their shadows in it.
+  function shadow(spread,blurRadius) {
+    r.save(); r.shadowColor=color; r.shadowBlur=blurRadius*pixelRatio;
+    r.shadowOffsetX=200*pixelRatio; r.fillStyle=color;
+    r.beginPath(); r.arc(center-200,center,Math.max(.01,radius+spread),0,Math.PI*2); r.fill(); r.restore();
+  }
+  shadow(-1,20); shadow(1,7);
+  r.fillStyle=color; r.beginPath(); r.arc(center,center,radius,0,Math.PI*2); r.fill();
+  const tile=document.createElement('canvas'); tile.width=tile.height=pixels;
+  const t=tile.getContext('2d'); t.filter=`blur(${softness*pixelRatio}px)`; t.drawImage(raw,0,0);
+  const result={tile,extent:pixels/pixelRatio,key};
+  if(sprites.size>=2048) sprites.delete(sprites.keys().next().value);
+  sprites.set(key,result); return result;
 }
-function momentLabel(e){return dateLabel(e)+(e.time?' · '+escapeRecord(e.time):'')}
-function optionalSections(e){return [['What my body did',e.action],['After the contact',e.after],['A thought afterward',e.reflection]].filter(([,text])=>text&&text!==e.quote).map(([title,text])=>'<p class="section-label">'+title+'</p><p class="body-copy">'+text+'</p>').join('')}
+// Shared white glow masks keep hundreds of emotional shades from multiplying
+// expensive blur operations. Each particle reuses one tinted tile.
+function starSprite(color,size,blur,p) {
+  const mask=glowMask(size,blur), key=mask.key+color;
+  if(p.spriteKey===key) return p.sprite;
+  p.spriteCache ??= new Map();
+  if(p.spriteCache.has(key)) {p.spriteKey=key;p.sprite=p.spriteCache.get(key);return p.sprite;}
+  let tile;
+  if(p.spriteCache.size>=3) {const oldest=p.spriteCache.keys().next().value;tile=p.spriteCache.get(oldest).tile;p.spriteCache.delete(oldest);}
+  else tile=document.createElement('canvas');
+  if(tile.width!==mask.tile.width || tile.height!==mask.tile.height) {
+    tile.width=mask.tile.width; tile.height=mask.tile.height;
+  }
+  const t=tile.getContext('2d');
+  t.globalCompositeOperation='source-over'; t.clearRect(0,0,tile.width,tile.height);
+  t.drawImage(mask.tile,0,0);
+  t.globalCompositeOperation='source-in';t.fillStyle=color;t.fillRect(0,0,tile.width,tile.height);
+  t.globalCompositeOperation='source-over';
+  p.spriteKey=key; p.sprite={tile,extent:mask.extent,size,blur};p.spriteCache.set(key,p.sprite); return p.sprite;
+}
+function paintStars() {
+  ctx.clearRect(0,0,width,height);
+  drawn.sort((a,b)=>a.depth-b.depth);
+  // Bound expensive blur/tint work instead of rebuilding hundreds of tiles on
+  // one zoom frame. Round-robin avoids starving later stars during a long drag.
+  const deadline=performance.now()+2;
+  for(let checked=0,rebuilt=0;checked<drawn.length && rebuilt<8;checked++) {
+    const item=drawn[spriteCursor++ % drawn.length], {entry,p}=item;
+    if(p.alpha<.002) continue;
+    const key=`${Math.max(.25,Math.round(p.size*4)/4)}:${Math.round(p.blur*10)/10}:${pixelRatio}`+entry.color;
+    if(p.spriteKey===key) continue;
+    starSprite(entry.color,p.size,p.blur,p);rebuilt++;
+    if(performance.now()>=deadline) break;
+  }
+  for(const item of drawn) {
+    const {entry,p}=item;
+    const sprite=p.sprite;
+    if(!sprite || p.alpha<.002) continue;
+    // Position and size still react every frame while a glow tile is pending.
+    const extent=sprite.extent*Math.max(.05,p.size/Math.max(.25,sprite.size));
+    ctx.globalAlpha=p.alpha;
+    ctx.drawImage(sprite.tile,p.sx-extent/2,p.sy-extent/2,extent,extent);
+    const front=entry.key===focusedKey, hovered=entry.key===hoverKey, keyboard=entry.key===keyboardKey;
+    if(front || !entry.date || hovered || keyboard) {
+      ctx.beginPath(); ctx.lineWidth=1;
+      ctx.strokeStyle=!entry.date?'#c7bca32a':front?'#d3c2a655':'#b5a589';
+      ctx.setLineDash(!entry.date?[2,2]:[]);
+      ctx.arc(p.sx,p.sy,!entry.date?5.5:front?19.5:12.5,0,Math.PI*2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  ctx.globalAlpha=1;
+}
+function hitStar(clientX,clientY) {
+  const rect=universe.getBoundingClientRect(), x=clientX-rect.left, y=clientY-rect.top;
+  for(let i=drawn.length-1;i>=0;i--) {
+    const {entry,p}=drawn[i];
+    if(p.alpha>.025 && p.size>.7 && Math.abs(x-p.sx)<=13 && Math.abs(y-p.sy)<=13) return entry;
+  }
+  return null;
+}
+function activateStar(entry) {
+  if(!entry || performance.now()<suppressClickUntil) return;
+  stopPlayback();
+  if(focusedKey===entry.key) openDetail(); else bringForward(entry.key);
+}
+canvas.addEventListener('click',event=>activateStar(hitStar(event.clientX,event.clientY)));
 
 
-const $=s=>document.querySelector(s),universe=$('#universe'),preview=$('#preview'),detail=$('#detail');
-let current=null,activeSenses=new Set(),hover=null;
-let seed=7321;function rand(){seed=(seed*16807)%2147483647;return(seed-1)/2147483646}
-// Dense core and softly fading outliers; shared by new records.
-function createPosition(){
- const z=rand()*2-1,angle=rand()*Math.PI*2,ring=Math.sqrt(1-z*z);
- const radius=Math.pow(rand(),.65)*(rand()<.16?1.55:1.12);
- return{x:radius*ring*Math.cos(angle),y:radius*ring*Math.sin(angle),z:radius*z,fade:Math.max(.28,1-Math.max(0,radius-.6)*.75),depth:.25+rand()*.75,phase:rand()*Math.PI*2};
+function dateLabel(date, options = {}) {
+  if (!date) return 'Date not recorded';
+  const [year, month, day] = date.split('-').map(Number);
+  return new Intl.DateTimeFormat('en-US', {timeZone:'UTC', month:'short', day:'numeric', ...options})
+    .format(new Date(Date.UTC(year, month - 1, day)));
 }
-const positions=entries.map(createPosition);
-let nodes=[],lineNodes=[],linked=[],width=1,height=1,last=0,yaw=0,pitch=0,vx=0,vy=0,px=0,py=0,drift=0;
-let distance=3.1,targetDistance=3.1,animationStarted=false;
-let drag=null,suppressClickUntil=0;
-let motion=!matchMedia('(prefers-reduced-motion: reduce)').matches;
-function measure(){width=universe.clientWidth;height=universe.clientHeight;$('#lines').setAttribute('viewBox','0 0 '+width+' '+height)}
-function zoomTo(value){if(current||$('#method').open)return;targetDistance=Math.max(.18,Math.min(5.5,value));hover=null;preview.hidden=true;highlight(null);if(!motion)distance=targetDistance}
-function frame(t){const dt=Math.min((t-last)/1000||.016,.04);last=t;const paused=current||hover||drag?.moved||$('#method').open||!motion||document.hidden;
-const targetX=paused?0:Math.sign(px)*px*px*.32,targetY=paused?0:Math.sign(py)*py*py*.24,ease=1-Math.exp(-dt*3);vx+=(targetX-vx)*ease;vy+=(targetY-vy)*ease;if(!paused){yaw+=vx*dt;pitch-=vy*dt;drift+=dt}
-distance+=(targetDistance-distance)*(1-Math.exp(-dt*5));
-const mobile=width<750,cx=width*(mobile?.5:.63),cy=height*(mobile?.55:.51),focal=Math.min(width*(mobile?1.06:.72),height*.95),cosY=Math.cos(yaw),sinY=Math.sin(yaw),cosX=Math.cos(pitch),sinX=Math.sin(pitch);
-positions.forEach((p,i)=>{const bob=Math.sin(drift*.36+p.phase)*.007,x=p.x*cosY+p.z*sinY,z0=-p.x*sinY+p.z*cosY,y=(p.y+bob)*cosX-z0*sinX,z=(p.y+bob)*sinX+z0*cosX,viewZ=distance-z;
-p.sx=cx+x*(mobile?1.12:1.55)*focal/Math.max(.12,viewZ);p.sy=cy+y*.74*focal/Math.max(.12,viewZ);p.visible=viewZ>.14&&p.sx>-35&&p.sx<width+35&&p.sy>-35&&p.sy<height+35;
-const node=nodes[i];node.style.visibility=p.visible?'visible':'hidden';node.tabIndex=p.visible?0:-1;if(p.visible){const scale=Math.min(4,2.5/viewZ),size=(entries.length<80?4+p.depth*5:2.2+p.depth*4)*scale,alpha=Math.max(.09,Math.min(1,.95/viewZ+.18)*p.fade);node.style.transform='translate3d('+p.sx.toFixed(2)+'px,'+p.sy.toFixed(2)+'px,0) translate(-50%,-50%)';node.style.setProperty('--size',size.toFixed(2)+'px');node.style.setProperty('--halo',(size*1.3).toFixed(2)+'px');node.style.setProperty('--alpha',alpha.toFixed(2));node.style.zIndex=Math.round(1000/viewZ)}});
-if(linked.length){const a=positions[(current?.id||hover)-1];lineNodes.forEach((line,j)=>{const b=positions[linked[j].id-1];line.style.display=a.visible&&b.visible?'':'none';line.setAttribute('x1',a.sx);line.setAttribute('y1',a.sy);line.setAttribute('x2',b.sx);line.setAttribute('y2',b.sy)})}
-$('#depth-label').textContent=distance<1?'INSIDE THE FIELD':distance<2.4?'MOVING CLOSER':'FULL VIEW';requestAnimationFrame(frame)}
-document.addEventListener('pointermove',ev=>{if(ev.pointerType==='touch')return;px=Math.max(-1,Math.min(1,(ev.clientX/innerWidth-.5)*2));py=Math.max(-1,Math.min(1,(ev.clientY/innerHeight-.5)*2));if(Math.abs(px)<.12)px=0;if(Math.abs(py)<.12)py=0});document.documentElement.addEventListener('pointerleave',()=>{px=0;py=0});
-universe.addEventListener('wheel',e=>{if(e.ctrlKey||current||$('#method').open)return;e.preventDefault();const delta=e.deltaY*(e.deltaMode===1?16:e.deltaMode===2?height:1);zoomTo(targetDistance+Math.max(-180,Math.min(180,delta))*.0035)},{passive:false});
-$('#home-view').onclick=()=>{reset();yaw=0;pitch=0;px=0;py=0;vx=0;vy=0;zoomTo(3.1)};
-// Capture only after a movement threshold so a stationary click still opens a record.
-universe.addEventListener('pointerdown',e=>{if(e.button!==0||current||$('#method').open)return;drag={id:e.pointerId,startX:e.clientX,startY:e.clientY,x:e.clientX,y:e.clientY,time:performance.now(),moved:false};});
-document.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;const now=performance.now();if(!drag.moved&&Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY)<5)return;
-if(!drag.moved){drag.moved=true;universe.setPointerCapture(e.pointerId);universe.classList.add('dragging');hover=null;preview.hidden=true;highlight(null)}
-const dx=e.clientX-drag.x,dy=e.clientY-drag.y,elapsed=Math.max(.008,(now-drag.time)/1000),gain=.008;
-yaw+=dx*gain;pitch-=dy*gain;vx=Math.max(-3.5,Math.min(3.5,dx*gain/elapsed));vy=Math.max(-3.5,Math.min(3.5,dy*gain/elapsed));drag.x=e.clientX;drag.y=e.clientY;drag.time=now;e.preventDefault();},{passive:false});
-function endDrag(e){if(!drag||(e.pointerId!==undefined&&e.pointerId!==drag.id))return;const active=drag;drag=null;universe.classList.remove('dragging');if(active.moved){suppressClickUntil=performance.now()+350;hover=null;preview.hidden=true;px=0;py=0;if(performance.now()-active.time>120||e.type!=='pointerup'){vx=0;vy=0}}if(universe.hasPointerCapture(active.id))universe.releasePointerCapture(active.id);}
-document.addEventListener('pointerup',endDrag);document.addEventListener('pointercancel',endDrag);universe.addEventListener('lostpointercapture',endDrag);window.addEventListener('blur',endDrag);
-universe.addEventListener('click',e=>{if(performance.now()<suppressClickUntil){e.preventDefault();e.stopImmediatePropagation()}},true);
-function matches(e){return activeSenses.size===0||e.senses.some(s=>activeSenses.has(s))}
-function colorVector(color){const match=/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);return match?match.slice(1).map(v=>parseInt(v,16)):[148,185,173]}
-function colorDistance(a,b){const x=colorVector(a),y=colorVector(b),mean=(x[0]+y[0])/2,dr=x[0]-y[0],dg=x[1]-y[1],db=x[2]-y[2];return Math.sqrt((2+mean/256)*dr*dr+4*dg*dg+(2+(255-mean)/256)*db*db)}
-function related(e){return entries.filter(v=>v.id!==e.id&&matches(v)).sort((a,b)=>colorDistance(e.color,a.color)-colorDistance(e.color,b.color)).slice(0,9)}
-function draw(){const root=$('#stars');root.innerHTML=entries.map((e,i)=>{const p=positions[i];return '<button class="star" data-id="'+e.id+'" style="--color:'+e.color+';--size:'+(2+p.depth*10).toFixed(1)+'px;--halo:'+(3+p.depth*9).toFixed(1)+'px;--alpha:'+(.32+p.depth*.68).toFixed(2)+';z-index:'+Math.round(p.depth*10)+'" aria-label="'+e.title+', '+e.mood+'" aria-pressed="false"></button>'}).join('');nodes=[...root.querySelectorAll('.star')];nodes.forEach(b=>{const e=entries[+b.dataset.id-1];b.onpointerenter=()=>{if(!current&&!drag?.moved&&performance.now()>suppressClickUntil){hover=e.id;showPreview(e,b);highlight(e)}};b.onpointerleave=()=>{if(!current){hover=null;preview.hidden=true;highlight(null)}};b.onfocus=()=>{if(!current&&!drag?.moved&&performance.now()>suppressClickUntil){hover=e.id;showPreview(e,b);highlight(e)}};b.onblur=()=>{if(!current){hover=null;preview.hidden=true;highlight(null)}};b.onclick=ev=>{ev.stopPropagation();select(e)}});measure();renderFilters();highlight(current);if(!animationStarted){animationStarted=true;requestAnimationFrame(frame)}}
-function renderFilters(){const all=activeSenses.size===0;$('#filters').innerHTML=senses.map(s=>{const pressed=s==='All'?all:activeSenses.has(s);return `<button aria-pressed="${pressed}" class="${pressed?'active':''}">${s}</button>`}).join('');$('#filters').querySelectorAll('button').forEach(b=>b.onclick=()=>{const sense=b.textContent;if(sense==='All')activeSenses.clear();else{activeSenses.has(sense)?activeSenses.delete(sense):activeSenses.add(sense);if(activeSenses.size===senses.length-1)activeSenses.clear()}reset();renderFilters();highlight(null)});$('#counter').textContent=`${String(entries.filter(matches).length).padStart(2,'0')} encounters`;$('#total').textContent=entries.length}
-function highlight(e){linked=e?related(e).filter(v=>positions[v.id-1].visible):[];const ids=new Set(linked.map(v=>v.id));nodes.forEach(b=>{const v=entries[+b.dataset.id-1];b.hidden=!matches(v);b.classList.toggle('dim',Boolean(e&&v.id!==e.id&&!ids.has(v.id)));b.classList.toggle('selected',v.id===e?.id);b.setAttribute('aria-pressed',String(v.id===current?.id))});$('#lines').innerHTML=linked.map(v=>'<line stroke="'+v.color+'" stroke-opacity=".34" stroke-width=".8"/>').join('');lineNodes=[...$('#lines').children]}
-function showPreview(e,b){preview.innerHTML=`<div class="mini-meta"><span class="swatch" style="--color:${e.color}"></span>${momentLabel(e)}</div><h2>${e.title}</h2><p>PLACE / ${e.place}</p><p>OBJECT / ${e.object}</p><p>BODY / ${e.body}</p><p>SENSES / ${e.senses.length?e.senses.join(' · '):'Bodily sensation'}</p><p>MOOD / ${e.mood}</p><p class="hint">Click to stay with this moment</p>`;preview.hidden=false;const rect=b.getBoundingClientRect(),pw=preview.offsetWidth,ph=preview.offsetHeight;preview.style.left=Math.max(12,Math.min(rect.right+16,innerWidth-pw-14))+'px';preview.style.top=Math.max(12,Math.min(rect.top-20,innerHeight-ph-14))+'px'}
-function select(e){current=e;hover=null;preview.hidden=true;detail.hidden=false;detail.style.setProperty('--color',e.color);$('#detail-body').innerHTML=`<p class="mini-meta"><span class="swatch" style="--color:${e.color}"></span>ENCOUNTER ${String(e.id).padStart(2,'0')}</p><h2>${e.title}</h2><p class="mini-meta">${momentLabel(e)}</p><blockquote class="quote">${e.quote}</blockquote><dl class="metadata"><dt>PLACE</dt><dd>${e.place}</dd><dt>OBJECT</dt><dd>${e.object}</dd><dt>BODY</dt><dd>${e.body}</dd><dt>SENSES</dt><dd>${e.senses.length?e.senses.join(' · '):'Bodily sensation'}</dd><dt>TEXTURE / PERCEPTION</dt><dd>${e.texture}</dd><dt>MOOD</dt><dd>${e.mood}</dd></dl>${optionalSections(e)}<p class="section-label">SIMILAR COLORS · ${related(e).length}</p><p class="body-copy">These lines connect moments with nearby emotional colors. The events may be completely different; the feeling simply sits somewhere close.</p><div class="connections">${related(e).slice(0,4).map(v=>`<button data-related="${v.id}"><span class="swatch" style="--color:${v.color}"></span>${v.title} ↗</button>`).join('')}</div>`;detail.scrollTop=0;detail.querySelectorAll('[data-related]').forEach(b=>b.onclick=()=>select(entries[+b.dataset.related-1]));highlight(e)}
-function reset(){const id=current?.id;current=null;hover=null;detail.hidden=true;preview.hidden=true;highlight(null);return id}
-$('#close').onclick=()=>{const id=reset();const b=document.querySelector(`[data-id="${id}"]`);if(b){b.focus();hover=null;preview.hidden=true;highlight(null)}};
-universe.onclick=e=>{if(!e.target.closest('.star'))reset()};document.addEventListener('keydown',e=>{if(e.key==='Escape')reset()});
-$('#about').onclick=()=>{$('#method').showModal();preview.hidden=true};$('#close-method').onclick=()=>$('#method').close();
-$('#export').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({status:'Personal sensory diary',timeZone:'America/Los_Angeles',entries},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='surface-atlas-export.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
-addEventListener('resize',()=>{measure();positions.forEach(p=>{p.sx=undefined});highlight(current);preview.hidden=true});
-const motionButton=$('#motion');function updateMotion(){motionButton.textContent=motion?'PAUSE DRIFT Ⅱ':'START DRIFT ▷';motionButton.setAttribute('aria-pressed',String(motion))}motionButton.onclick=()=>{motion=!motion;px=0;py=0;updateMotion()};matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',e=>{motion=!e.matches;updateMotion()});updateMotion();draw();
+function timeLabel(entry) {
+  return [dateLabel(entry.date, {year:'numeric'}), entry.time].filter(Boolean).join(' · ');
+}
+function seedFor(key) {
+  let hash = 2166136261;
+  for (const c of key) hash = Math.imul(hash ^ c.charCodeAt(0), 16777619);
+  return () => {hash ^= hash << 13; hash ^= hash >>> 17; hash ^= hash << 5; return (hash >>> 0) / 4294967296;};
+}
+function makeParticle(key) {
+  const random = seedFor(key);
+  const z=random()*2-1, angle=random()*Math.PI*2, ring=Math.sqrt(1-z*z);
+  const radius=Math.pow(random(),.65)*(random()<.16?1.55:1.12);
+  const variation=Math.pow(random(),1.25);
+  return {x:radius*ring*Math.cos(angle), y:radius*ring*Math.sin(angle), z:radius*z,
+    phase:random()*Math.PI*2, depth:random(),
+    baseSize:.35+variation*6.4, luminance:.0005+Math.pow(variation,2)*.46,
+    sx:null, sy:null, size:0, alpha:0, blur:.5};
+}
+function rebuildIndex() {
+  byKey = new Map(entries.map(e => [e.key, e]));
+  // Stable sorting preserves the workbook's sequence within each day. Its fuzzy
+  // time labels and all-day contacts cannot establish an exact chronology.
+  dated = entries.filter(e => e.date).sort((a,b) => a.date.localeCompare(b.date));
+  sequenceIndex = new Map(dated.map((e,i) => [e.key,i]));
+  $('#position').max = Math.max(0,dated.length - 1);
+  $('#total').textContent = entries.length;
+  $('#undated-open').textContent = `${entries.filter(e => !e.date).length} entries without a date ↗`;
+  const dates = [...new Set(dated.map(e => e.date))];
+  $('#days').innerHTML = dates.map(day => `<button data-day="${day}" aria-pressed="false">${dateLabel(day)}<small>${dateLabel(day,{weekday:'short'}).split(',')[0]}</small></button>`).join('');
+  $('#days').querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+    stopPlayback();
+    // Jump to the first row for that date, so its sequence can be followed.
+    seek(dated.findIndex(e => e.date === button.dataset.day));
+  }));
+  const oldFilter = $('#archive-day').value;
+  $('#archive-day').innerHTML = '<option value="all">All dates</option>' +
+    dates.map(day => `<option value="${day}">${dateLabel(day)}</option>`).join('') + '<option value="undated">Date unknown</option>';
+  $('#archive-day').value = [...$('#archive-day').options].some(o => o.value === oldFilter) ? oldFilter : 'all';
+}
+function renderStars() {
+  const fragment = document.createDocumentFragment();
+  const oldParticles = particles;
+  particles = new Map(); nodes = new Map();
+  for (const entry of entries) {
+    const node = document.createElement('button');
+    node.className = 'star-accessible';
+    node.dataset.key = entry.key;
+    node.style.setProperty('--color', entry.color);
+    node.setAttribute('aria-label', `${entry.title}. ${dateLabel(entry.date)}. Bring into view.`);
+    node.setAttribute('aria-pressed', 'false');
+    node.addEventListener('click', () => activateStar(entry));
+    node.addEventListener('focus', () => {keyboardKey=entry.key; showPreview(entry);});
+    node.addEventListener('blur', () => {keyboardKey=''; hidePreview();});
+    nodes.set(entry.key, node);
+    particles.set(entry.key, oldParticles.get(entry.key) || makeParticle(entry.key));
+    fragment.append(node);
+  }
+  $('#stars').replaceChildren(fragment);
+  measure();
+}
+function renderFocus(label) {
+  const entry = byKey.get(focusedKey);
+  if (!entry) return;
+  $('#focus-state').textContent = label || (returned ? 'BACK IN VIEW' : 'IN VIEW');
+  $('#focus-date').textContent = timeLabel(entry);
+  $('#focus-title').textContent = entry.title;
+  $('#focus-copy').textContent = entry.text;
+  $('#focus-card').style.setProperty('--color', entry.color);
+  for (const [key,node] of nodes) {
+    node.classList.toggle('front', key === focusedKey);
+    node.setAttribute('aria-pressed', String(key === focusedKey));
+    node.hidden = sequenceIndex.has(key) && sequenceIndex.get(key) > cursor;
+  }
+  $('#position').value = cursor;
+  $('#position').setAttribute('aria-valuetext', `${cursor+1} of ${dated.length}. ${dated[cursor]?.title || ''}. ${dateLabel(dated[cursor]?.date)}`);
+  $('#sequence-count').textContent = `${cursor+1} / ${dated.length} dated entries`;
+  $('#previous').disabled = cursor <= 0;
+  $('#next').disabled = cursor >= dated.length-1;
+  $('#days').querySelectorAll('button').forEach(button => {
+    const active = button.dataset.day === dated[cursor]?.date;
+    button.classList.toggle('active',active);
+    button.setAttribute('aria-pressed',String(active));
+  });
+  updatePlayButton();
+}
+function seek(index, announce = true) {
+  const previousCursor = cursor;
+  cursor = Math.max(0, Math.min(dated.length-1, index));
+  focusedKey = dated[cursor]?.key || entries[0]?.key;
+  returned = false;
+  if(cursor === previousCursor + 1 && noticedAt.size) brighten(focusedKey);
+  else resetAttention();
+  hidePreview(); renderFocus();
+  if (announce && !playing) $('#announcement').textContent = `${byKey.get(focusedKey)?.title}. ${dateLabel(byKey.get(focusedKey)?.date)}.`;
+}
+function bringForward(key, label) {
+  const entry = byKey.get(key);
+  if (!entry) return;
+  const index = sequenceIndex.get(key);
+  if (index !== undefined && index > cursor) cursor = index;
+  focusedKey = key;
+  returned = true;
+  brighten(key);
+  hidePreview(); renderFocus(label);
+  $('#announcement').textContent = `${entry.title} is back in view. Original date: ${dateLabel(entry.date)}.`;
+}
+function updatePlayButton() {
+  $('#play').textContent = playing ? 'Pause Ⅱ' : cursor >= dated.length-1 ? 'Replay ▷' : 'Play ▷';
+  $('#play').setAttribute('aria-pressed',String(playing));
+}
+function stopPlayback() {playing = false; clearInterval(timer); timer = null; updatePlayButton();}
+function startPlayback() {
+  if (dated.length < 2) return;
+  if (cursor >= dated.length-1) seek(0,false);
+  playing = true; updatePlayButton();
+  clearInterval(timer);
+  timer = setInterval(() => {
+    if (document.hidden || document.querySelector('dialog[open]')) {stopPlayback(); return;}
+    if (cursor >= dated.length-1) {stopPlayback(); return;}
+    seek(cursor+1,false);
+    if (cursor >= dated.length-1) stopPlayback();
+  },Number($('#speed').value));
+}
+$('#play').addEventListener('click', () => playing ? stopPlayback() : startPlayback());
+$('#previous').addEventListener('click', () => {stopPlayback(); seek(cursor-1);});
+$('#next').addEventListener('click', () => {stopPlayback(); seek(cursor+1);});
+$('#position').addEventListener('input', e => {stopPlayback(); seek(Number(e.target.value));});
+$('#speed').addEventListener('change', () => {if (playing) startPlayback();});
 
-let syncedSignature='';
-function syncSaved(){const incoming=AtlasRecords.read();const signature=JSON.stringify(incoming);if(signature===syncedSignature)return;syncedSignature=signature;const prior=new Map(entries.filter(e=>e.sourceId).map(e=>[e.sourceId,positions[e.id-1]]));const base=entries.filter(e=>!e.sourceId);const basePositions=base.map(e=>positions[e.id-1]);entries.splice(0,entries.length,...base);positions.splice(0,positions.length,...basePositions);importedIds.clear();for(const r of incoming){entries.push(importRecord(r));if(prior.has(r.id)){positions.push(prior.get(r.id));continue}positions.push(createPosition())}reset();draw();requestAnimationFrame(openLinked)}
-window.addEventListener('storage',e=>{if(e.key===AtlasRecords.key)syncSaved()});window.addEventListener('atlas-records-changed',syncSaved);window.addEventListener('focus',syncSaved);
-function openLinked(){const m=location.hash.match(/^#record=(.+)$/);if(m){const e=entries.find(e=>e.sourceId===decodeURIComponent(m[1]));if(e)select(e)}}window.addEventListener('hashchange',openLinked);requestAnimationFrame(openLinked);
+function measure() {
+  width=universe.clientWidth; height=universe.clientHeight;
+  const ratio=Math.min(2,window.devicePixelRatio || 1);
+  if(ratio!==pixelRatio) {pixelRatio=ratio;sprites.clear();}
+  canvas.width=Math.round(width*pixelRatio); canvas.height=Math.round(height*pixelRatio);
+  ctx.setTransform(pixelRatio,0,0,pixelRatio,0,0);
+}
+new ResizeObserver(measure).observe(universe);
+function frame(now) {
+  const dt = Math.min(.05,(now-previousFrame)/1000 || .016); previousFrame=now;
+  if (!document.hidden) {
+    attentionTime += dt;
+    const modal = !!document.querySelector('dialog[open]');
+    if(modal) {requestAnimationFrame(frame);return;}
+    const ease = reduced ? 1 : 1-Math.exp(-dt*3.2);
+    const movable = drifting && !reduced && !modal && !hoverKey && !drag;
+    if (movable) {driftTime+=dt; turnTarget+=pointerX*Math.abs(pointerX)*dt*.32; pitchTarget-=pointerY*Math.abs(pointerY)*dt*.24;}
+    turn+=(turnTarget-turn)*ease; pitch+=(pitchTarget-pitch)*ease;
+    distance+=(targetDistance-distance)*ease;
+    const cx=width*.5, cy=height*.5, focal=Math.min(width*.9,height*1.18);
+    const cosY=Math.cos(turn), sinY=Math.sin(turn), cosX=Math.cos(pitch), sinX=Math.sin(pitch);
+    drawn=[];
+    for (const entry of entries) {
+      const node=nodes.get(entry.key), p=particles.get(entry.key);
+      if (node.hidden) continue;
+      const front=entry.key===focusedKey;
+      const elapsed=Math.max(0,attentionTime-(noticedAt.get(entry.key) ?? attentionTime-220));
+      const strength=Math.exp(-elapsed/FADE_SECONDS);
+      const bob=drifting && !reduced ? Math.sin(driftTime*.36+p.phase)*.007 : 0;
+      // Same volumetric distribution and two-axis perspective rotation as V1.
+      const x=p.x*cosY+p.z*sinY, z0=-p.x*sinY+p.z*cosY;
+      const y=(p.y+bob)*cosX-z0*sinX, z=(p.y+bob)*sinX+z0*cosX;
+      const viewZ=distance-z;
+      const targetX=cx+x*1.55*focal/Math.max(.12,viewZ);
+      const targetY=cy+y*.74*focal/Math.max(.12,viewZ);
+      const visible=viewZ>.14&&targetX>-30&&targetX<width+30&&targetY>-30&&targetY<height+30;
+      if(p.visible!==visible) {node.tabIndex=visible?0:-1;p.visible=visible;}
+      if(!visible) continue;
+      // Continuous intrinsic variation, depth and attention all contribute.
+      // Moving the camera closer reveals small, nearly invisible background points.
+      const scale=Math.min(8,2.6/viewZ);
+      const size=Math.min(20,(p.baseSize+strength*2.8)*scale);
+      const alpha=Math.min(.98,(p.luminance+strength*.6)*Math.pow(scale,1.6));
+      if (p.sx === null) {p.sx=targetX; p.sy=targetY;}
+      p.sx+=(targetX-p.sx)*ease; p.sy+=(targetY-p.sy)*ease;
+      p.size+=(size-p.size)*ease; p.alpha+=(alpha-p.alpha)*ease;
+      p.blur+=((.6+(1-strength)*.4)-p.blur)*ease;
+      drawn.push({entry,p,depth:Math.round(1000/viewZ)});
+    }
+    paintStars();
+  }
+  requestAnimationFrame(frame);
+}
+function hidePreview() {hoverKey=''; preview.hidden=true;}
+function showPreview(entry) {
+  if (drag || document.querySelector('dialog[open]')) return;
+  hoverKey=entry.key;
+  preview.innerHTML=`<span>${escapeHTML(timeLabel(entry))}</span><strong>${escapeHTML(entry.title)}</strong>`;
+  preview.hidden=false;
+  const bounds=universe.getBoundingClientRect(), p=particles.get(entry.key);
+  const rect={right:bounds.left+(p?.sx ?? width/2)+13,top:bounds.top+(p?.sy ?? height/2)-13};
+  preview.style.left=Math.max(10,Math.min(innerWidth-preview.offsetWidth-12,rect.right+12))+'px';
+  preview.style.top=Math.max(10,Math.min(innerHeight-preview.offsetHeight-12,rect.top))+'px';
+}
+universe.addEventListener('pointermove',event => {
+  const rect=universe.getBoundingClientRect();
+  pointerX=Math.max(-1,Math.min(1,((event.clientX-rect.left)/width-.5)*2));
+  pointerY=Math.max(-1,Math.min(1,((event.clientY-rect.top)/height-.5)*2));
+  if (!drag || drag.id!==event.pointerId) {
+    const hit=event.target===canvas?hitStar(event.clientX,event.clientY):null;
+    if(hit && hoverKey!==hit.key) showPreview(hit);
+    else if(!hit && hoverKey) hidePreview();
+    return;
+  }
+  if (!drag.moved && Math.hypot(event.clientX-drag.startX,event.clientY-drag.startY)<5) return;
+  if (!drag.moved) {drag.moved=true; universe.setPointerCapture(event.pointerId); universe.classList.add('dragging'); hidePreview();}
+  turnTarget+=(event.clientX-drag.x)*.008;
+  pitchTarget-=(event.clientY-drag.y)*.008;
+  // Dragging reacts much faster than the ambient edge motion.
+  turn=turnTarget; pitch=pitchTarget;
+  drag.y=event.clientY; drag.x=event.clientX; event.preventDefault();
+});
+universe.addEventListener('pointerleave',()=>{pointerX=pointerY=0;hidePreview();});
+universe.addEventListener('pointerdown',event=>{
+  if(event.button!==0 || event.target.closest('.field-controls')) return;
+  drag={id:event.pointerId,x:event.clientX,y:event.clientY,startX:event.clientX,startY:event.clientY,moved:false};
+});
+function endDrag(event) {
+  if (!drag || (event.pointerId!==undefined && event.pointerId!==drag.id)) return;
+  const previous=drag; drag=null;
+  if (previous.moved) suppressClickUntil=performance.now()+300;
+  if(universe.hasPointerCapture(previous.id)) universe.releasePointerCapture(previous.id);
+  universe.classList.remove('dragging'); pointerX=pointerY=0;
+}
+window.addEventListener('pointerup',endDrag);
+window.addEventListener('pointercancel',endDrag);
+window.addEventListener('blur',endDrag);
+universe.addEventListener('lostpointercapture',endDrag);
+universe.addEventListener('wheel',event=>{
+  if(event.ctrlKey) return;
+  event.preventDefault(); hidePreview();
+  const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?height:1);
+  targetDistance=Math.max(.18,Math.min(5.5,targetDistance+Math.max(-180,Math.min(180,delta))*.0035));
+},{passive:false});
+$('#home-view').addEventListener('click',()=>{turnTarget=0;pitchTarget=0;targetDistance=3.1;pointerX=pointerY=0;});
+function updateMotion(){ $('#motion').textContent=drifting?'Pause drift':'Start drift'; $('#motion').setAttribute('aria-pressed',String(drifting)); }
+$('#motion').addEventListener('click',()=>{drifting=!drifting;updateMotion();});
+matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change',event=>{reduced=event.matches;drifting=!reduced;updateMotion();});
+window.addEventListener('resize',()=>{measure();hidePreview();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){stopPlayback();hidePreview();}});
+
+function openDialog(id) {
+  stopPlayback(); hidePreview(); returningFocus=document.activeElement;
+  $('#'+id).showModal();
+}
+document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>$('#'+button.dataset.close).close()));
+document.querySelectorAll('dialog').forEach(dialog=>dialog.addEventListener('close',()=>{returningFocus?.focus?.({preventScroll:true});hidePreview();}));
+function openDetail() {
+  const entry=byKey.get(focusedKey); if(!entry) return;
+  const fields=[['PLACE',entry.place],['BODY',entry.body],['SURFACE',entry.object],['SENSATION',entry.texture],['CONTACT PATTERN',entry.contactForm],['MOOD',entry.mood || 'Not reported']];
+  $('#detail-body').innerHTML=`<p class="eyebrow">${escapeHTML(entry.key)} · TOUCH</p>
+    <h2 id="detail-title">${escapeHTML(entry.title)}</h2><p class="moment-date">${escapeHTML(timeLabel(entry))}</p>
+    <blockquote class="quote">${escapeHTML(entry.text)}</blockquote>
+    <dl class="metadata">${fields.map(([label,value])=>`<dt>${label}</dt><dd>${escapeHTML(value || 'Not recorded')}</dd>`).join('')}</dl>
+    ${entry.followUp?`<p class="source-note">Still to check: ${escapeHTML(entry.followUp)}</p>`:''}
+    ${entry.source?`<details class="source-original"><summary>Original source wording · row ${entry.sourceRow}</summary>${Object.entries(entry.source).filter(([k,v])=>v!==null&&!['证据状态','依据'].includes(k)).map(([k,v])=>`<p><strong>${escapeHTML(k)}</strong><br>${escapeHTML(v)}</p>`).join('')}</details>`:''}`;
+  openDialog('detail'); $('#detail').scrollTop=0;
+}
+$('#focus-title').addEventListener('click',openDetail);
+$('#focus-title').addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail();}});
+$('#about').addEventListener('click',()=>openDialog('method'));
+
+function searchWords(value) {
+  return String(value || '').normalize('NFKC').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+}
+function searchScore(entry, terms) {
+  if(!terms.length) return 1;
+  // Search content, not hidden source notes/statuses. English matches start at
+  // word boundaries (and no longer matches hand); Chinese supports substrings.
+  const source=entry.source || {};
+  const fields=[
+    [entry.key,12], [entry.title,10], [entry.object,8], [entry.text,6],
+    [entry.body,4], [entry.place,4], [entry.scene,3], [entry.texture,2],
+    [entry.date,2], [entry.time,2],
+    [source['接触对象'],8], [source['具体动作'],6], [source['身体部位'],4],
+    [source['空间'],4], [source['触感'],2]
+  ].map(([value,weight])=>({text:String(value || '').normalize('NFKC').toLocaleLowerCase(),words:searchWords(value),weight}));
+  let score=0;
+  for(const term of terms) {
+    let best=0;
+    for(const field of fields) {
+      const chinese=/[\p{Script=Han}]/u.test(term);
+      const exact=field.words.includes(term);
+      const matches=chinese ? field.text.includes(term) : field.words.some(word=>word.startsWith(term));
+      if(matches) best=Math.max(best,field.weight+(exact?2:0));
+    }
+    if(!best) return 0;
+    score+=best;
+  }
+  return score;
+}
+function renderArchive() {
+  const query=$('#search').value.trim(), day=$('#archive-day').value;
+  const terms=searchWords(query);
+  const found=entries.map(entry=>({entry,score:searchScore(entry,terms)}))
+    .filter(({entry,score})=>score>0 && (day==='all' || (day==='undated' ? !entry.date : entry.date===day)))
+    .sort((a,b)=>b.score-a.score).map(({entry})=>entry);
+  $('#archive-count').textContent=`${found.length} ${found.length===1?'entry':'entries'}${query ? ' matching “'+query+'”' : ''}`;
+  $('#archive-list').innerHTML=found.length ? found.map(entry=>`<button data-entry="${escapeHTML(entry.key)}"><span>${escapeHTML(entry.sourceId?'CLOUD':entry.key)}</span><span><strong>${escapeHTML(entry.title)}</strong><small class="search-excerpt">${escapeHTML(entry.text)}</small><small>${escapeHTML(timeLabel(entry))}</small></span><span class="return-arrow">↗</span></button>`).join('') : '<p class="muted">No contacts match. Try another word or date.</p>';
+}
+function openArchive(undated=false) {
+  $('#search').value=''; $('#archive-day').value=undated?'undated':'all';
+  renderArchive(); openDialog('archive'); $('#archive').scrollTop=0;
+}
+$('#archive-open').addEventListener('click',()=>openArchive());
+$('#undated-open').addEventListener('click',()=>openArchive(true));
+$('#search').addEventListener('input',renderArchive);
+$('#search').addEventListener('search',renderArchive);
+$('#search').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();renderArchive();}});
+$('#archive-day').addEventListener('change',renderArchive);
+$('#archive-list').addEventListener('click',event=>{
+  const button=event.target.closest('[data-entry]'); if(!button) return;
+  $('#archive').close(); bringForward(button.dataset.entry);
+  $('#focus-title').focus({preventScroll:true});
+});
+$('#export').addEventListener('click',()=>{
+  const content={title:'TUTU · Touch & Attention',timeZone:'America/Los_Angeles',
+    note:'Rows are contact types or action steps, not counts of actual touches. Visual recession is not measured awareness. Source statuses and original dates are retained.',entries};
+  const url=URL.createObjectURL(new Blob([JSON.stringify(content,null,2)],{type:'application/json'}));
+  const anchor=document.createElement('a'); anchor.href=url; anchor.download='tutu-touch-diary.json'; anchor.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+
+function cloudEntry(record) {
+  const when=new Date(record.recordedAt), valid=Number.isFinite(when.getTime());
+  const date=valid?new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'}).format(when):null;
+  return {...record, key:'cloud-'+record.id, sourceId:record.id, date,
+    time:valid?when.toLocaleTimeString('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',minute:'2-digit'}):'',
+    evidence:'Personal log',color:safeColor(record.color),texture:'Not separately recorded',contactForm:'Not recorded',senses:['Touch']};
+}
+function syncSaved() {
+  let incoming=[];
+  try {incoming=(window.AtlasRecords?.read() || []).filter(r=>r.senses?.some(s=>s==='Touch'||s==='触觉'));}
+  catch(error){console.warn('Could not read saved touch records:',error.message);return;}
+  const signature=JSON.stringify(incoming);
+  if(signature===syncSignature) return;
+  syncSignature=signature;
+  const formerKeys=new Set(entries.map(e=>e.key)), formerCursorKey=dated[cursor]?.key;
+  const oldFocus=focusedKey;
+  entries=[...base,...incoming.map(cloudEntry)];
+  rebuildIndex(); renderStars();
+  cursor=sequenceIndex.get(formerCursorKey) ?? dated.length-1;
+  focusedKey=byKey.has(oldFocus)?oldFocus:dated[cursor]?.key;
+  const additions=entries.filter(e=>e.sourceId&&!formerKeys.has(e.key));
+  if(additions.length){stopPlayback();bringForward(additions[additions.length-1].key,'NEW FROM YOUR LOG');}
+  else renderFocus();
+  if($('#archive').open) renderArchive();
+  if($('#detail').open) {
+    // A sign-out or cross-device removal must not leave a deleted cloud entry open.
+    if(!byKey.has(oldFocus)) $('#detail').close();
+  }
+  openLinked();
+}
+function openLinked() {
+  const match=location.hash.match(/^#record=(.+)$/); if(!match) return;
+  let id;try{id=decodeURIComponent(match[1]);}catch{return;}
+  const entry=entries.find(e=>e.sourceId===id);
+  if(entry){stopPlayback();bringForward(entry.key,'FROM YOUR LOG');}
+}
+window.addEventListener('atlas-records-changed',syncSaved);
+window.addEventListener('storage',syncSaved);
+window.addEventListener('hashchange',openLinked);
+
+rebuildIndex(); renderStars(); seek(dated.length-1,false); updateMotion();
+syncSaved(); openLinked(); requestAnimationFrame(frame);
